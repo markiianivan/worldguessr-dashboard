@@ -1,0 +1,13 @@
+# Private secrets and tokens
+.token
+.gdrive_url
+.streamlit/secrets.toml
+
+# Local database files
+worldguessr_full_history.json
+worldguessr_full_history.json.tmp
+
+# Python cache
+__pycache__/
+*.pyc
+.DS_Store
