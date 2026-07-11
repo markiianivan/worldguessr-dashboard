@@ -590,63 +590,30 @@ if json_path:
 
 # Sync parameters
 st.sidebar.divider()
-st.sidebar.subheader("🔄 Sync Settings")
-
-# Determine placeholders to keep secret strings hidden from UI values
-wg_placeholder = "•••••••• (Configured in Secrets/Local)" if resolved_worldguessr_token else "Enter API Secret Token"
-gh_placeholder = "•••••••• (Configured in Secrets/Local)" if resolved_github_token else "Enter GitHub Personal Access Token"
-
-token_input = st.sidebar.text_input(
-    "API Secret Token:", 
-    value="",
-    type="password",
-    placeholder=wg_placeholder,
-    help="Leave empty to use configured secret, or enter a new one to override."
-)
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("🐙 GitHub Storage Settings")
-github_repo_input = st.sidebar.text_input(
-    "GitHub Repo:",
-    value=resolved_github_repo,
-    help="Format: username/repo"
-)
-github_token_input = st.sidebar.text_input(
-    "GitHub Personal Access Token:",
-    value="",
-    type="password",
-    placeholder=gh_placeholder,
-    help="Leave empty to use configured secret, or enter a new one to override."
-)
+st.sidebar.subheader("🔄 Database Syncing")
 
 col_sync1, col_sync2 = st.sidebar.columns(2)
 with col_sync1:
     if st.button("Sync History", use_container_width=True):
-        # Resolve tokens to use
-        worldguessr_token_to_use = token_input if token_input else resolved_worldguessr_token
-        github_token_to_use = github_token_input if github_token_input else resolved_github_token
-        github_repo_to_use = github_repo_input if github_repo_input else resolved_github_repo
-        
-        if worldguessr_token_to_use:
-            if token_input:
-                save_token_locally(token_input)
-            if github_repo_to_use and github_token_input:
-                save_github_settings_locally(github_repo_to_use, github_token_input)
+        if resolved_worldguessr_token:
             with st.spinner("Syncing latest games..."):
-                did_update = sync_worldguessr_data(worldguessr_token_to_use, json_path, github_repo_to_use, github_token_to_use)
+                did_update = sync_worldguessr_data(
+                    resolved_worldguessr_token, 
+                    json_path, 
+                    resolved_github_repo, 
+                    resolved_github_token
+                )
                 if did_update:
                     st.rerun()
         else:
-            st.error("Enter a token first!")
+            st.error("WorldGuessr token not configured! Set WORLDGUESSR_TOKEN in your Secrets/Local config.")
 with col_sync2:
     if st.button("Refresh", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
 # Load all data for bounds calculation before building filter widgets
-github_token_to_use = github_token_input if github_token_input else resolved_github_token
-github_repo_to_use = github_repo_input if github_repo_input else resolved_github_repo
-df_games, df_rounds = load_and_process_data(json_path, mtime, github_repo_to_use, github_token_to_use)
+df_games, df_rounds = load_and_process_data(json_path, mtime, resolved_github_repo, resolved_github_token)
 
 if df_games.empty:
     st.warning("No valid games found with both players!")
