@@ -137,8 +137,12 @@ UKRAINE_OBLAST_MAP = {
 }
 
 # --- 1. Token Safety & Ingestion ---
-def get_default_token():
-    # Try loading from local .token file first
+def get_resolved_worldguessr_token():
+    try:
+        if "WORLDGUESSR_TOKEN" in st.secrets:
+            return st.secrets["WORLDGUESSR_TOKEN"]
+    except Exception:
+        pass
     token_file = os.path.join(os.path.dirname(__file__), ".token")
     if os.path.exists(token_file):
         try:
@@ -146,8 +150,6 @@ def get_default_token():
                 return f.read().strip()
         except Exception:
             pass
-            
-    # Fallback: Extract from export_history.py in the downloads directory
     try:
         history_script = "/Users/markiian-ivan/Downloads/WorldGuessr Analysis/export_history.py"
         if os.path.exists(history_script):
@@ -168,14 +170,27 @@ def save_token_locally(token):
     except Exception:
         pass
 
-def get_default_github_settings():
-    repo = "markiianivan/worldguessr-dashboard"
-    token = ""
+def get_resolved_github_token():
+    try:
+        if "GITHUB_TOKEN" in st.secrets:
+            return st.secrets["GITHUB_TOKEN"]
+    except Exception:
+        pass
+    github_file = os.path.join(os.path.dirname(__file__), ".github_settings")
+    if os.path.exists(github_file):
+        try:
+            with open(github_file, 'r', encoding='utf-8') as f:
+                lines = f.read().splitlines()
+                if len(lines) >= 2 and lines[1].strip():
+                    return lines[1].strip()
+        except Exception:
+            pass
+    return ""
+
+def get_resolved_github_repo():
     try:
         if "GITHUB_REPO" in st.secrets:
-            repo = st.secrets["GITHUB_REPO"]
-        if "GITHUB_TOKEN" in st.secrets:
-            token = st.secrets["GITHUB_TOKEN"]
+            return st.secrets["GITHUB_REPO"]
     except Exception:
         pass
     github_file = os.path.join(os.path.dirname(__file__), ".github_settings")
@@ -184,12 +199,10 @@ def get_default_github_settings():
             with open(github_file, 'r', encoding='utf-8') as f:
                 lines = f.read().splitlines()
                 if len(lines) >= 1 and lines[0].strip():
-                    repo = lines[0].strip()
-                if len(lines) >= 2 and lines[1].strip():
-                    token = lines[1].strip()
+                    return lines[0].strip()
         except Exception:
             pass
-    return repo, token
+    return "markiianivan/worldguessr-dashboard"
 
 def save_github_settings_locally(repo, token):
     github_file = os.path.join(os.path.dirname(__file__), ".github_settings")
@@ -537,7 +550,9 @@ default_dir = "/Users/markiian-ivan/Downloads/WorldGuessr Analysis"
 dir_path = st.sidebar.text_input("Raw Data Directory:", value=default_dir)
 
 # Check for GitHub settings from secrets or local config first
-default_github_repo, default_github_token = get_default_github_settings()
+resolved_github_repo = get_resolved_github_repo()
+resolved_github_token = get_resolved_github_token()
+resolved_worldguessr_token = get_resolved_worldguessr_token()
 
 # Find JSON files in dir_path
 json_files = []
@@ -552,7 +567,7 @@ if json_files:
     file_name = st.sidebar.selectbox("Select History File:", json_files)
     json_path = os.path.join(dir_path, file_name)
     mtime = os.path.getmtime(json_path)
-elif default_github_repo:
+elif resolved_github_repo:
     # If running in cloud and GitHub Repo is configured, bypass directory check
     json_path = os.path.join(os.path.dirname(__file__), "worldguessr_full_history.json")
     if os.path.exists(json_path):
@@ -577,38 +592,48 @@ if json_path:
 st.sidebar.divider()
 st.sidebar.subheader("🔄 Sync Settings")
 
-# Extract and mask default token
-default_token = get_default_token()
+# Determine placeholders to keep secret strings hidden from UI values
+wg_placeholder = "•••••••• (Configured in Secrets/Local)" if resolved_worldguessr_token else "Enter API Secret Token"
+gh_placeholder = "•••••••• (Configured in Secrets/Local)" if resolved_github_token else "Enter GitHub Personal Access Token"
+
 token_input = st.sidebar.text_input(
     "API Secret Token:", 
-    value=default_token,
+    value="",
     type="password",
-    help="Your secret API token is masked. Clear it or enter a new one to update."
+    placeholder=wg_placeholder,
+    help="Leave empty to use configured secret, or enter a new one to override."
 )
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🐙 GitHub Storage Settings")
 github_repo_input = st.sidebar.text_input(
     "GitHub Repo:",
-    value=default_github_repo,
+    value=resolved_github_repo,
     help="Format: username/repo"
 )
 github_token_input = st.sidebar.text_input(
     "GitHub Personal Access Token:",
-    value=default_github_token,
+    value="",
     type="password",
-    help="Your GitHub classic token to read and write database changes."
+    placeholder=gh_placeholder,
+    help="Leave empty to use configured secret, or enter a new one to override."
 )
 
 col_sync1, col_sync2 = st.sidebar.columns(2)
 with col_sync1:
     if st.button("Sync History", use_container_width=True):
-        if token_input:
-            save_token_locally(token_input)
-            if github_repo_input:
-                save_github_settings_locally(github_repo_input, github_token_input)
+        # Resolve tokens to use
+        worldguessr_token_to_use = token_input if token_input else resolved_worldguessr_token
+        github_token_to_use = github_token_input if github_token_input else resolved_github_token
+        github_repo_to_use = github_repo_input if github_repo_input else resolved_github_repo
+        
+        if worldguessr_token_to_use:
+            if token_input:
+                save_token_locally(token_input)
+            if github_repo_to_use and github_token_input:
+                save_github_settings_locally(github_repo_to_use, github_token_input)
             with st.spinner("Syncing latest games..."):
-                did_update = sync_worldguessr_data(token_input, json_path, github_repo_input, github_token_input)
+                did_update = sync_worldguessr_data(worldguessr_token_to_use, json_path, github_repo_to_use, github_token_to_use)
                 if did_update:
                     st.rerun()
         else:
@@ -619,7 +644,9 @@ with col_sync2:
         st.rerun()
 
 # Load all data for bounds calculation before building filter widgets
-df_games, df_rounds = load_and_process_data(json_path, mtime, github_repo_input, github_token_input)
+github_token_to_use = github_token_input if github_token_input else resolved_github_token
+github_repo_to_use = github_repo_input if github_repo_input else resolved_github_repo
+df_games, df_rounds = load_and_process_data(json_path, mtime, github_repo_to_use, github_token_to_use)
 
 if df_games.empty:
     st.warning("No valid games found with both players!")
