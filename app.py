@@ -474,16 +474,27 @@ st.sidebar.divider()
 default_dir = "/Users/markiian-ivan/Downloads/WorldGuessr Analysis"
 dir_path = st.sidebar.text_input("Raw Data Directory:", value=default_dir)
 
+# Check for Google Drive URL from secrets or local config first
+default_gdrive_url = get_default_gdrive_url()
+
 # Find JSON files in dir_path
 json_files = []
 if os.path.exists(dir_path) and os.path.isdir(dir_path):
     json_files = [f for f in os.listdir(dir_path) if f.endswith('.json')]
     json_files.sort(key=lambda x: os.path.getmtime(os.path.join(dir_path, x)), reverse=True)
 
+json_path = None
+mtime = 0.0
+
 if json_files:
     file_name = st.sidebar.selectbox("Select History File:", json_files)
     json_path = os.path.join(dir_path, file_name)
     mtime = os.path.getmtime(json_path)
+elif default_gdrive_url:
+    # If running in cloud and Google Drive URL is active, bypass directory check
+    json_path = os.path.join(os.path.dirname(__file__), "worldguessr_full_history.json")
+    if os.path.exists(json_path):
+        mtime = os.path.getmtime(json_path)
 else:
     st.sidebar.error("No JSON files found in directory!")
     st.stop()
@@ -491,13 +502,14 @@ else:
 # Auto File Watcher running in a Streamlit fragment (checks for file changes every 3s)
 @st.fragment(run_every=3)
 def file_watcher_fragment(filepath, current_mtime):
-    if os.path.exists(filepath):
+    if filepath and os.path.exists(filepath):
         new_mtime = os.path.getmtime(filepath)
         if new_mtime != current_mtime:
             st.session_state.last_mtime = new_mtime
             st.rerun()
 
-file_watcher_fragment(json_path, mtime)
+if json_path:
+    file_watcher_fragment(json_path, mtime)
 
 # Sync parameters
 st.sidebar.divider()
