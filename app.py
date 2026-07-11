@@ -168,31 +168,91 @@ def save_token_locally(token):
     except Exception:
         pass
 
-def get_default_gdrive_url():
+def get_default_github_settings():
+    repo = "markiianivan/worldguessr-dashboard"
+    token = ""
     try:
-        if "GDRIVE_URL" in st.secrets:
-            return st.secrets["GDRIVE_URL"]
+        if "GITHUB_REPO" in st.secrets:
+            repo = st.secrets["GITHUB_REPO"]
+        if "GITHUB_TOKEN" in st.secrets:
+            token = st.secrets["GITHUB_TOKEN"]
     except Exception:
         pass
-    gdrive_file = os.path.join(os.path.dirname(__file__), ".gdrive_url")
-    if os.path.exists(gdrive_file):
+    github_file = os.path.join(os.path.dirname(__file__), ".github_settings")
+    if os.path.exists(github_file):
         try:
-            with open(gdrive_file, 'r', encoding='utf-8') as f:
-                return f.read().strip()
+            with open(github_file, 'r', encoding='utf-8') as f:
+                lines = f.read().splitlines()
+                if len(lines) >= 1 and lines[0].strip():
+                    repo = lines[0].strip()
+                if len(lines) >= 2 and lines[1].strip():
+                    token = lines[1].strip()
         except Exception:
             pass
-    return ""
+    return repo, token
 
-def save_gdrive_url_locally(url):
-    gdrive_file = os.path.join(os.path.dirname(__file__), ".gdrive_url")
+def save_github_settings_locally(repo, token):
+    github_file = os.path.join(os.path.dirname(__file__), ".github_settings")
     try:
-        with open(gdrive_file, 'w', encoding='utf-8') as f:
-            f.write(url.strip())
+        with open(github_file, 'w', encoding='utf-8') as f:
+            f.write(f"{repo.strip()}\n{token.strip()}\n")
     except Exception:
         pass
 
+def load_from_github(repo, filename, token=None):
+    raw_url = f"https://raw.githubusercontent.com/{repo}/main/{filename}"
+    try:
+        res = requests.get(raw_url, timeout=10)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+    if token:
+        url = f"https://api.github.com/repos/{repo}/contents/{filename}"
+        headers = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github.v3.raw"
+        }
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                return res.json()
+        except Exception:
+            pass
+    return None
+
+def save_to_github(repo, token, filename, updated_data):
+    url = f"https://api.github.com/repos/{repo}/contents/{filename}"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    sha = None
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            sha = res.json().get("sha")
+    except Exception:
+        pass
+    import base64
+    content_str = json.dumps(updated_data, indent=4, ensure_ascii=False)
+    content_base64 = base64.b64encode(content_str.encode('utf-8')).decode('utf-8')
+    payload = {
+        "message": "Sync game history via WorldGuessr Dashboard",
+        "content": content_base64
+    }
+    if sha:
+        payload["sha"] = sha
+    try:
+        res = requests.put(url, headers=headers, json=payload, timeout=20)
+        if res.status_code in [200, 201]:
+            return True
+    except Exception:
+        pass
+    return False
+
 # --- 2. Incremental Syncing Logic ---
-def sync_worldguessr_data(secret_token, filepath, gdrive_url=None):
+def sync_worldguessr_data(secret_token, filepath, github_repo=None, github_token=None):
     headers = {
         "Accept": "*/*",
         "Content-Type": "application/json",
@@ -204,21 +264,21 @@ def sync_worldguessr_data(secret_token, filepath, gdrive_url=None):
     history_url = "https://api.worldguessr.com/api/gameHistory"
     details_url = "https://api.worldguessr.com/api/gameDetails"
     
-    # Load existing file (try GDrive first, fallback to local)
+    # Load existing file (try GitHub first, fallback to local)
     local_data = []
     existing_ids = set()
-    loaded_from_gdrive = False
+    loaded_from_github = False
     
-    if gdrive_url:
+    if github_repo:
         try:
-            res = requests.get(gdrive_url, timeout=12)
-            if res.status_code == 200:
-                local_data = res.json()
-                loaded_from_gdrive = True
+            github_data = load_from_github(github_repo, "worldguessr_full_history.json", github_token)
+            if github_data is not None:
+                local_data = github_data
+                loaded_from_github = True
         except Exception as e:
-            st.warning(f"Failed to load existing history from Google Drive: {e}")
+            st.warning(f"Failed to load existing history from GitHub: {e}")
             
-    if not loaded_from_gdrive and os.path.exists(filepath):
+    if not loaded_from_github and os.path.exists(filepath):
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 local_data = json.load(f)
@@ -300,15 +360,17 @@ def sync_worldguessr_data(secret_token, filepath, gdrive_url=None):
         # Prepend new games to keep newest-first order
         updated_data = new_games + local_data
         
-        # Save to Google Drive if URL is provided
-        if gdrive_url:
-            status_box.text("Uploading updated database to Google Drive...")
+        # Save to GitHub if repo and token are provided
+        if github_repo and github_token:
+            status_box.text("Uploading updated database to GitHub...")
             try:
-                res = requests.post(gdrive_url, json=updated_data, timeout=20)
-                res.raise_for_status()
-                st.success("Successfully uploaded synced data to Google Drive!")
+                success = save_to_github(github_repo, github_token, "worldguessr_full_history.json", updated_data)
+                if success:
+                    st.success("Successfully uploaded synced data to GitHub!")
+                else:
+                    st.error("Failed to upload synced data to GitHub.")
             except Exception as e:
-                st.error(f"Failed to upload to Google Drive: {e}")
+                st.error(f"Failed to upload to GitHub: {e}")
                 
         # Save to file atomically to prevent file watcher race condition crashes
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -330,20 +392,20 @@ def sync_worldguessr_data(secret_token, filepath, gdrive_url=None):
 
 # --- 3. Data Loading & Preprocessing ---
 @st.cache_data(hash_funcs={float: lambda x: x})
-def load_and_process_data(filepath, mtime, gdrive_url=None):
+def load_and_process_data(filepath, mtime, github_repo=None, github_token=None):
     raw_data = []
-    loaded_from_gdrive = False
+    loaded_from_github = False
     
-    if gdrive_url:
+    if github_repo:
         try:
-            res = requests.get(gdrive_url, timeout=12)
-            if res.status_code == 200:
-                raw_data = res.json()
-                loaded_from_gdrive = True
+            github_data = load_from_github(github_repo, "worldguessr_full_history.json", github_token)
+            if github_data is not None:
+                raw_data = github_data
+                loaded_from_github = True
         except Exception as e:
-            st.error(f"Failed to load from Google Drive: {e}. Falling back to local file.")
+            st.error(f"Failed to load from GitHub: {e}. Falling back to local file.")
             
-    if not loaded_from_gdrive:
+    if not loaded_from_github:
         if not os.path.exists(filepath):
             return pd.DataFrame(), pd.DataFrame()
         with open(filepath, 'r') as f:
@@ -474,8 +536,8 @@ st.sidebar.divider()
 default_dir = "/Users/markiian-ivan/Downloads/WorldGuessr Analysis"
 dir_path = st.sidebar.text_input("Raw Data Directory:", value=default_dir)
 
-# Check for Google Drive URL from secrets or local config first
-default_gdrive_url = get_default_gdrive_url()
+# Check for GitHub settings from secrets or local config first
+default_github_repo, default_github_token = get_default_github_settings()
 
 # Find JSON files in dir_path
 json_files = []
@@ -490,8 +552,8 @@ if json_files:
     file_name = st.sidebar.selectbox("Select History File:", json_files)
     json_path = os.path.join(dir_path, file_name)
     mtime = os.path.getmtime(json_path)
-elif default_gdrive_url:
-    # If running in cloud and Google Drive URL is active, bypass directory check
+elif default_github_repo:
+    # If running in cloud and GitHub Repo is configured, bypass directory check
     json_path = os.path.join(os.path.dirname(__file__), "worldguessr_full_history.json")
     if os.path.exists(json_path):
         mtime = os.path.getmtime(json_path)
@@ -524,13 +586,18 @@ token_input = st.sidebar.text_input(
     help="Your secret API token is masked. Clear it or enter a new one to update."
 )
 
-# Extract default gdrive URL
-default_gdrive_url = get_default_gdrive_url()
-gdrive_url_input = st.sidebar.text_input(
-    "Google Drive API URL:",
-    value=default_gdrive_url,
+st.sidebar.markdown("---")
+st.sidebar.subheader("🐙 GitHub Storage Settings")
+github_repo_input = st.sidebar.text_input(
+    "GitHub Repo:",
+    value=default_github_repo,
+    help="Format: username/repo"
+)
+github_token_input = st.sidebar.text_input(
+    "GitHub Personal Access Token:",
+    value=default_github_token,
     type="password",
-    help="Paste your deployed Google Apps Script Web App URL to sync data with Google Drive."
+    help="Your GitHub classic token to read and write database changes."
 )
 
 col_sync1, col_sync2 = st.sidebar.columns(2)
@@ -538,10 +605,10 @@ with col_sync1:
     if st.button("Sync History", use_container_width=True):
         if token_input:
             save_token_locally(token_input)
-            if gdrive_url_input:
-                save_gdrive_url_locally(gdrive_url_input)
+            if github_repo_input:
+                save_github_settings_locally(github_repo_input, github_token_input)
             with st.spinner("Syncing latest games..."):
-                did_update = sync_worldguessr_data(token_input, json_path, gdrive_url_input)
+                did_update = sync_worldguessr_data(token_input, json_path, github_repo_input, github_token_input)
                 if did_update:
                     st.rerun()
         else:
@@ -552,7 +619,7 @@ with col_sync2:
         st.rerun()
 
 # Load all data for bounds calculation before building filter widgets
-df_games, df_rounds = load_and_process_data(json_path, mtime, gdrive_url_input)
+df_games, df_rounds = load_and_process_data(json_path, mtime, github_repo_input, github_token_input)
 
 if df_games.empty:
     st.warning("No valid games found with both players!")

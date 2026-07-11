@@ -1,6 +1,7 @@
 # Private secrets and tokens
 .token
 .gdrive_url
+.github_settings
 .streamlit/secrets.toml
 
 # Local database files
