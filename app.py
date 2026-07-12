@@ -1149,6 +1149,7 @@ with tab_geography:
                         
                         fig_uk_choropleth.update_layout(
                             title="Ukraine Shape Map: Average Round Point Differential by Oblast",
+                            height=650,
                             coloraxis_colorbar=dict(title="Point Diff"),
                             margin=dict(l=0, r=0, t=40, b=0),
                             template="plotly_dark",
@@ -1248,6 +1249,7 @@ with tab_geography:
                     
                     fig_world_choropleth.update_layout(
                         title=f"World Shape Map: Average H2H Point Differential ({selected_continent})",
+                        height=650,
                         coloraxis_colorbar=dict(title="Point Diff"),
                         margin=dict(l=0, r=0, t=40, b=0),
                         template="plotly_dark",
@@ -1366,6 +1368,7 @@ with tab_round_map:
             
             fig_indiv_map.update_layout(
                 title=f"All Individual Target Coordinates Mapped ({len(df_all_rounds_filtered)} rounds shown)",
+                height=650,
                 margin=dict(l=0, r=0, t=40, b=0),
                 template="plotly_dark",
                 paper_bgcolor="rgba(0,0,0,0)",
