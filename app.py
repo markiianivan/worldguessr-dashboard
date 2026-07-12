@@ -658,7 +658,7 @@ days_of_week = st.sidebar.multiselect(
 # Who Won Filter (Radio button choice instead of dropdown)
 who_won = st.sidebar.radio(
     "Who Won:",
-    options=['All', 'markiianivan won', 'troutfly won', 'Draw'],
+    options=['All', 'markiianivan won', 'troutfly won'],
     index=0
 )
 
@@ -682,8 +682,6 @@ if who_won == 'markiianivan won':
     df_games_filtered = df_games_filtered[df_games_filtered['winner'] == 'markiianivan']
 elif who_won == 'troutfly won':
     df_games_filtered = df_games_filtered[df_games_filtered['winner'] == 'troutfly']
-elif who_won == 'Draw':
-    df_games_filtered = df_games_filtered[df_games_filtered['winner'] == 'draw']
 
 if map_filter == "World":
     df_games_filtered = df_games_filtered[df_games_filtered['map_type'] == 'World']
@@ -1161,7 +1159,7 @@ with tab_geography:
                         
                         fig_uk_choropleth.update_layout(
                             title="Ukraine Shape Map: Average Round Point Differential by Oblast",
-                            height=650,
+                            height=400,
                             coloraxis_colorbar=dict(title="Point Diff"),
                             margin=dict(l=0, r=0, t=40, b=0),
                             template="plotly_dark",
