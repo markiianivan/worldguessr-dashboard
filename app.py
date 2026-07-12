@@ -1141,7 +1141,9 @@ with tab_geography:
                         )
                         
                         fig_uk_choropleth.update_geos(
-                            fitbounds="locations",
+                            projection_type="mercator",
+                            center=dict(lat=48.3794, lon=31.1656),
+                            projection_scale=20,
                             visible=False
                         )
                         
