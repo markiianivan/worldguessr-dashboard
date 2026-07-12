@@ -545,9 +545,8 @@ st.sidebar.markdown("<h1 style='color: #FF8C00; text-align: center; margin-botto
 st.sidebar.markdown("<p style='text-align: center; margin-top: 0px; font-size: 0.9em; opacity: 0.8;'>H2H Match Analytics</p>", unsafe_allow_html=True)
 st.sidebar.divider()
 
-# Setup Config Variables
-default_dir = "/Users/markiian-ivan/Downloads/WorldGuessr Analysis"
-dir_path = st.sidebar.text_input("Raw Data Directory:", value=default_dir)
+# Setup Config Variables (Hidden from UI)
+dir_path = "/Users/markiian-ivan/Downloads/WorldGuessr Analysis"
 
 # Check for GitHub settings from secrets or local config first
 resolved_github_repo = get_resolved_github_repo()
@@ -648,32 +647,43 @@ hour_range = st.sidebar.slider(
     format="%02d:00"
 )
 
-# Time of Day Slots Multiselect
-def get_time_of_day(hr):
-    if 6 <= hr < 12: return 'Morning'
-    elif 12 <= hr < 18: return 'Afternoon'
-    elif 18 <= hr < 24: return 'Evening'
-    else: return 'Night'
+# Day of Week Filter
+days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+days_of_week = st.sidebar.multiselect(
+    "Day of Week:",
+    options=days_order,
+    default=days_order
+)
 
-time_slots = st.sidebar.multiselect(
-    "Time Slots:",
-    options=['Morning', 'Afternoon', 'Evening', 'Night'],
-    default=['Morning', 'Afternoon', 'Evening', 'Night']
+# Who Won Filter
+who_won = st.sidebar.selectbox(
+    "Who Won:",
+    options=['All', 'markiianivan won', 'troutfly won', 'Draw'],
+    index=0
 )
 
 # Apply filters to dataframes
 df_games_filtered = df_games.copy()
 df_games_filtered['date'] = df_games_filtered['started_at'].dt.date
 df_games_filtered['hour'] = df_games_filtered['started_at'].dt.hour
-df_games_filtered['time_of_day'] = df_games_filtered['hour'].apply(get_time_of_day)
+df_games_filtered['day_name'] = df_games_filtered['started_at'].dt.day_name()
 
+# Base filters (Date, Hour, Day of Week)
 df_games_filtered = df_games_filtered[
     (df_games_filtered['date'] >= start_date) & 
     (df_games_filtered['date'] <= end_date) & 
     (df_games_filtered['hour'] >= hour_range[0]) & 
     (df_games_filtered['hour'] <= hour_range[1]) & 
-    (df_games_filtered['time_of_day'].isin(time_slots))
+    (df_games_filtered['day_name'].isin(days_of_week))
 ]
+
+# Apply Who Won Filter
+if who_won == 'markiianivan won':
+    df_games_filtered = df_games_filtered[df_games_filtered['winner'] == 'markiianivan']
+elif who_won == 'troutfly won':
+    df_games_filtered = df_games_filtered[df_games_filtered['winner'] == 'troutfly']
+elif who_won == 'Draw':
+    df_games_filtered = df_games_filtered[df_games_filtered['winner'] == 'draw']
 
 if map_filter == "World":
     df_games_filtered = df_games_filtered[df_games_filtered['map_type'] == 'World']
