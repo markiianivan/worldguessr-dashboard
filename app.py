@@ -1115,11 +1115,21 @@ with tab_geography:
                         with open(geojson_path, 'r', encoding='utf-8') as f:
                             ukraine_geojson = json.load(f)
                             
-                        # Filter out unmatched borders so they don't break fitbounds or map styling
-                        geojson_names = {feat['properties'].get('shapeName') for feat in ukraine_geojson['features']}
-                        df_oblast_filtered = df_oblast[df_oblast['uk_oblast'].isin(geojson_names)].copy()
+                        # Get all shape names from the GeoJSON to ensure all Ukrainian regions (including Crimea) are always rendered
+                        geojson_names = {feat['properties'].get('shapeName') for feat in ukraine_geojson['features'] if feat['properties'].get('shapeName')}
                         
-                        max_diff = max(df_oblast_filtered['diff'].abs().max() if not df_oblast_filtered.empty else 1.0, 1.0)
+                        # Create a base DataFrame containing all 27 region names in Ukraine
+                        df_base = pd.DataFrame({'uk_oblast': list(geojson_names)})
+                        
+                        # Left join actual stats onto base DataFrame so unplayed regions remain as grey shapes
+                        df_oblast_filtered = pd.merge(df_base, df_oblast, on='uk_oblast', how='left')
+                        
+                        # Fill NaNs for stats (except diff, which must remain NaN so unplayed regions are colored grey)
+                        df_oblast_filtered['m_score_mean'] = df_oblast_filtered['m_score_mean'].fillna(0)
+                        df_oblast_filtered['t_score_mean'] = df_oblast_filtered['t_score_mean'].fillna(0)
+                        df_oblast_filtered['rounds_count'] = df_oblast_filtered['rounds_count'].fillna(0).astype(int)
+                        
+                        max_diff = max(df_oblast_filtered['diff'].dropna().abs().max() if not df_oblast_filtered.empty else 1.0, 1.0)
                         
                         fig_uk_choropleth = px.choropleth(
                             df_oblast_filtered,
