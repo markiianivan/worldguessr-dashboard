@@ -1077,7 +1077,7 @@ with tab_geography:
     st.subheader("🌍 Geospatial Boundary Shape Maps")
     st.markdown(
         "Interactive **Vector Choropleth Shape Maps**. Regions are filled with colors indicating the H2H average point differential "
-        "(🟢 **Orange** highlights where you lead, 🔵 **Blue** shows where troutfly leads, and ⚪ **Grey** represents equal/unplayed regions). "
+        "(🟠 **Orange** highlights where you lead, 🔵 **Blue** shows where troutfly leads, and ⚪ **Grey** represents equal/unplayed regions). "
         "These maps render natively offline and do not rely on Mapbox tile servers.",
         unsafe_allow_html=True
     )
@@ -1150,18 +1150,17 @@ with tab_geography:
                             labels={'diff': 'Avg Point Diff'}
                         )
                         
+                        st.markdown("### Ukraine Shape Map: Average Round Point Differential by Oblast")
+                        
                         fig_uk_choropleth.update_geos(
-                            projection_type="mercator",
-                            center=dict(lat=48.3794, lon=31.1656),
-                            projection_scale=20,
+                            fitbounds="locations",
                             visible=False
                         )
                         
                         fig_uk_choropleth.update_layout(
-                            title="Ukraine Shape Map: Average Round Point Differential by Oblast",
                             height=400,
                             coloraxis_colorbar=dict(title="Point Diff"),
-                            margin=dict(l=0, r=0, t=40, b=0),
+                            margin=dict(l=0, r=0, t=10, b=0),
                             template="plotly_dark",
                             paper_bgcolor="rgba(0,0,0,0)"
                         )
@@ -1257,11 +1256,11 @@ with tab_geography:
                         
                     fig_world_choropleth.update_geos(**geos_settings)
                     
+                    st.markdown(f"### World Shape Map: Average H2H Point Differential ({selected_continent})")
                     fig_world_choropleth.update_layout(
-                        title=f"World Shape Map: Average H2H Point Differential ({selected_continent})",
                         height=650,
                         coloraxis_colorbar=dict(title="Point Diff"),
-                        margin=dict(l=0, r=0, t=40, b=0),
+                        margin=dict(l=0, r=0, t=10, b=0),
                         template="plotly_dark",
                         paper_bgcolor="rgba(0,0,0,0)"
                     )
@@ -1272,7 +1271,7 @@ with tab_round_map:
     st.subheader("📍 Offline-Optimized Vector Round Map")
     st.markdown(
         "This map plots **every target round coordinate** on a native vector map (no external tiles loaded). "
-        "🔴 **Orange circles** represent rounds where you outscored troutfly. "
+        "🟠 **Orange circles** represent rounds where you outscored troutfly. "
         "🔵 **Blue circles** show rounds where troutfly outscored you. "
         "⚪ **White/Grey circles** represent rounds with equal points.",
         unsafe_allow_html=True
@@ -1376,10 +1375,10 @@ with tab_round_map:
                 
             fig_indiv_map.update_geos(**geos_settings)
             
+            st.markdown(f"### All Individual Target Coordinates Mapped ({len(df_all_rounds_filtered)} rounds shown)")
             fig_indiv_map.update_layout(
-                title=f"All Individual Target Coordinates Mapped ({len(df_all_rounds_filtered)} rounds shown)",
                 height=650,
-                margin=dict(l=0, r=0, t=40, b=0),
+                margin=dict(l=0, r=0, t=10, b=0),
                 template="plotly_dark",
                 paper_bgcolor="rgba(0,0,0,0)",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
