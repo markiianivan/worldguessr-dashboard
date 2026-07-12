@@ -655,8 +655,8 @@ days_of_week = st.sidebar.multiselect(
     default=days_order
 )
 
-# Who Won Filter
-who_won = st.sidebar.selectbox(
+# Who Won Filter (Radio button choice instead of dropdown)
+who_won = st.sidebar.radio(
     "Who Won:",
     options=['All', 'markiianivan won', 'troutfly won', 'Draw'],
     index=0
@@ -1018,7 +1018,9 @@ with tab_fatigue:
     if df_rounds_filtered.empty:
         st.warning("No round-level data found in the filtered view.")
     else:
-        df_fatigue = df_rounds_filtered.groupby('round_number')[['m_score', 't_score', 'm_time', 't_time']].mean().reset_index()
+        # Limit to rounds 1-10 to focus on typical game lengths (excluding outliers like 20-round custom games)
+        df_fatigue_rounds = df_rounds_filtered[df_rounds_filtered['round_number'] <= 10]
+        df_fatigue = df_fatigue_rounds.groupby('round_number')[['m_score', 't_score', 'm_time', 't_time']].mean().reset_index()
         
         col_fat1, col_fat2 = st.columns(2)
         
