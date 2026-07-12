@@ -930,6 +930,14 @@ with tab_heatmap:
     # Calculate Day of Week & Hour Category on local Kyiv Time
     df_heatmap = df_games_filtered.copy()
     df_heatmap['day_of_week'] = df_heatmap['started_at'].dt.day_name()
+    
+    def get_time_of_day(hr):
+        if 6 <= hr < 12: return 'Morning'
+        elif 12 <= hr < 18: return 'Afternoon'
+        elif 18 <= hr < 24: return 'Evening'
+        else: return 'Night'
+        
+    df_heatmap['time_of_day'] = df_heatmap['started_at'].dt.hour.apply(get_time_of_day)
     df_heatmap['diff'] = df_heatmap['m_points'] - df_heatmap['t_points']
     
     if df_heatmap.empty:
