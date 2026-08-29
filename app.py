@@ -1211,21 +1211,22 @@ with tab_geography:
                         with open(geojson_path, 'r', encoding='utf-8') as f:
                             ukraine_geojson = json.load(f)
                             
-                        # Get all shape names from the GeoJSON to ensure all Ukrainian regions (including Crimea) are always rendered
+                        # Get all shape names from the GeoJSON to ensure all Ukrainian regions (including Crimea and Sevastopol) are always rendered
                         geojson_names = {feat['properties'].get('shapeName') for feat in ukraine_geojson['features'] if feat['properties'].get('shapeName')}
                         
                         # Create a base DataFrame containing all 27 region names in Ukraine
                         df_base = pd.DataFrame({'uk_oblast': list(geojson_names)})
                         
-                        # Left join actual stats onto base DataFrame so unplayed regions remain as grey shapes
+                        # Left join actual stats onto base DataFrame so unplayed regions remain fully rendered as neutral grey
                         df_oblast_filtered = pd.merge(df_base, df_oblast, on='uk_oblast', how='left')
                         
-                        # Fill NaNs for stats (except diff, which must remain NaN so unplayed regions are colored grey)
+                        # Fill NaNs: 0 diff maps to center (#1F2937 dark neutral grey)
                         df_oblast_filtered['m_score_mean'] = df_oblast_filtered['m_score_mean'].fillna(0)
                         df_oblast_filtered['t_score_mean'] = df_oblast_filtered['t_score_mean'].fillna(0)
                         df_oblast_filtered['rounds_count'] = df_oblast_filtered['rounds_count'].fillna(0).astype(int)
+                        df_oblast_filtered['diff'] = df_oblast_filtered['diff'].fillna(0.0)
                         
-                        max_diff = max(df_oblast_filtered['diff'].dropna().abs().max() if not df_oblast_filtered.empty else 1.0, 1.0)
+                        max_diff = max(df_oblast_filtered['diff'].abs().max(), 1.0)
                         
                         fig_uk_choropleth = px.choropleth(
                             df_oblast_filtered,
@@ -1253,8 +1254,13 @@ with tab_geography:
                             visible=False
                         )
                         
+                        fig_uk_choropleth.update_traces(
+                            marker_line_color='#4B5563',
+                            marker_line_width=1.2
+                        )
+                        
                         fig_uk_choropleth.update_layout(
-                            height=400,
+                            height=600,
                             coloraxis_colorbar=dict(title="Point Diff"),
                             margin=dict(l=0, r=0, t=10, b=0),
                             template="plotly_dark",
