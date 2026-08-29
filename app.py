@@ -213,59 +213,85 @@ def save_github_settings_locally(repo, token):
         pass
 
 def load_from_github(repo, filename, token=None):
-    raw_url = f"https://raw.githubusercontent.com/{repo}/main/{filename}"
-    try:
-        res = requests.get(raw_url, timeout=10)
-        if res.status_code == 200:
-            return res.json()
-    except Exception:
-        pass
+    headers = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
+    # 1. Try GitHub API with raw format if token is available (always fresh, bypasses CDN)
     if token:
-        url = f"https://api.github.com/repos/{repo}/contents/{filename}"
-        headers = {
-            "Authorization": f"token {token}",
-            "Accept": "application/vnd.github.v3.raw"
+        api_headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github.v3.raw",
+            "Cache-Control": "no-cache"
         }
+        url = f"https://api.github.com/repos/{repo}/contents/{filename}"
         try:
-            res = requests.get(url, headers=headers, timeout=10)
+            res = requests.get(url, headers=api_headers, timeout=15)
             if res.status_code == 200:
                 return res.json()
         except Exception:
             pass
+
+    # 2. Try raw GitHub URL with timestamp cache-buster to prevent Fastly 5-minute CDN stale cache
+    raw_url = f"https://raw.githubusercontent.com/{repo}/main/{filename}?_t={int(time.time())}"
+    try:
+        res = requests.get(raw_url, headers=headers, timeout=15)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
     return None
 
 def save_to_github(repo, token, filename, updated_data):
+    if not token or not repo:
+        return False, "Missing GitHub Repo or Token configuration"
+        
     url = f"https://api.github.com/repos/{repo}/contents/{filename}"
     headers = {
-        "Authorization": f"token {token}",
+        "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github.v3+json"
     }
     sha = None
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        res = requests.get(url, headers=headers, timeout=15)
         if res.status_code == 200:
             sha = res.json().get("sha")
-    except Exception:
-        pass
+        elif res.status_code == 401:
+            return False, "GitHub Authentication failed (401 Bad credentials). Please check your GITHUB_TOKEN."
+        elif res.status_code == 404:
+            # File might not exist yet
+            pass
+        else:
+            return False, f"GitHub check failed: HTTP {res.status_code} - {res.text[:150]}"
+    except Exception as e:
+        return False, f"Network error connecting to GitHub: {e}"
+
     import base64
     content_str = json.dumps(updated_data, indent=4, ensure_ascii=False)
     content_base64 = base64.b64encode(content_str.encode('utf-8')).decode('utf-8')
     payload = {
-        "message": "Sync game history via WorldGuessr Dashboard",
+        "message": f"Sync {len(updated_data)} matches via WorldGuessr Dashboard",
         "content": content_base64
     }
     if sha:
         payload["sha"] = sha
+        
     try:
-        res = requests.put(url, headers=headers, json=payload, timeout=20)
+        res = requests.put(url, headers=headers, json=payload, timeout=30)
         if res.status_code in [200, 201]:
-            return True
-    except Exception:
-        pass
-    return False
+            return True, "Successfully committed to GitHub repository!"
+        else:
+            try:
+                err_msg = res.json().get("message", res.text)
+            except Exception:
+                err_msg = res.text[:200]
+            return False, f"GitHub upload rejected: HTTP {res.status_code} - {err_msg}"
+    except Exception as e:
+        return False, f"Network error uploading to GitHub: {e}"
 
 # --- 2. Incremental Syncing Logic ---
 def sync_worldguessr_data(secret_token, filepath, github_repo=None, github_token=None):
+    if not secret_token:
+        st.error("WorldGuessr API Secret Token is missing! Please configure WORLDGUESSR_TOKEN.")
+        return False
+
     headers = {
         "Accept": "*/*",
         "Content-Type": "application/json",
@@ -279,7 +305,6 @@ def sync_worldguessr_data(secret_token, filepath, github_repo=None, github_token
     
     # Load existing file (try GitHub first, fallback to local)
     local_data = []
-    existing_ids = set()
     loaded_from_github = False
     
     if github_repo:
@@ -291,7 +316,7 @@ def sync_worldguessr_data(secret_token, filepath, github_repo=None, github_token
         except Exception as e:
             st.warning(f"Failed to load existing history from GitHub: {e}")
             
-    if not loaded_from_github and os.path.exists(filepath):
+    if not loaded_from_github and filepath and os.path.exists(filepath):
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 local_data = json.load(f)
@@ -299,19 +324,25 @@ def sync_worldguessr_data(secret_token, filepath, github_repo=None, github_token
             st.error(f"Error loading existing local history: {e}")
             local_data = []
             
-    existing_ids = {g.get('game', {}).get('gameId') for g in local_data if g.get('game', {}).get('gameId')}
-    st.info(f"Sync starting. Currently have {len(local_data)} games in database.")
+    existing_ids = {
+        (g.get('game', {}).get('gameId') or g.get('gameId'))
+        for g in local_data
+        if (g.get('game', {}).get('gameId') or g.get('gameId'))
+    }
+    st.info(f"Sync starting. Current database contains {len(local_data)} games ({len(existing_ids)} unique IDs).")
     
     current_page = 1
     total_pages = 1
     new_games = []
     stop_sync = False
+    had_api_error = False
+    api_error_detail = ""
     
     progress_bar = st.progress(0)
     status_box = st.empty()
     
     while current_page <= total_pages:
-        status_box.text(f"Fetching history page {current_page}...")
+        status_box.text(f"Fetching history page {current_page} of {total_pages if total_pages > 1 else '?'}...")
         payload = {
             "secret": secret_token,
             "page": current_page,
@@ -319,11 +350,17 @@ def sync_worldguessr_data(secret_token, filepath, github_repo=None, github_token
         }
         
         try:
-            res = requests.post(history_url, headers=headers, json=payload, timeout=10)
-            res.raise_for_status()
+            res = requests.post(history_url, headers=headers, json=payload, timeout=15)
+            if res.status_code != 200:
+                had_api_error = True
+                api_error_detail = f"HTTP {res.status_code}: {res.text[:150]}"
+                st.error(f"WorldGuessr API error on page {current_page}: {api_error_detail}")
+                break
             data = res.json()
         except Exception as e:
-            st.error(f"Failed to fetch history page {current_page}: {e}")
+            had_api_error = True
+            api_error_detail = str(e)
+            st.error(f"Network error fetching history page {current_page}: {e}")
             break
             
         total_pages = data.get("pagination", {}).get("totalPages", 1)
@@ -338,26 +375,28 @@ def sync_worldguessr_data(secret_token, filepath, github_repo=None, github_token
                 continue
                 
             if game_id in existing_ids:
-                status_box.text("Found first duplicate game. Incremental sync complete!")
+                status_box.text(f"Reached existing match ({game_id}). Incremental sync complete!")
                 stop_sync = True
                 break
                 
-            status_box.text(f"Fetching details for new game: {game_id}...")
+            status_box.text(f"Fetching details for match: {game_id}...")
             details_payload = {
                 "secret": secret_token,
                 "gameId": game_id
             }
             
             try:
-                detail_res = requests.post(details_url, headers=headers, json=details_payload, timeout=10)
-                detail_res.raise_for_status()
-                new_games.append(detail_res.json())
+                detail_res = requests.post(details_url, headers=headers, json=details_payload, timeout=15)
+                if detail_res.status_code == 200:
+                    detail_data = detail_res.json()
+                    new_games.append(detail_data)
+                else:
+                    st.warning(f"Failed to fetch details for {game_id}: HTTP {detail_res.status_code}")
             except Exception as e:
                 st.warning(f"Failed to fetch details for {game_id}: {e}")
                 
-            time.sleep(1.5) # Polite delay
+            time.sleep(1.2) # Polite delay
             
-        # Update progress bar
         progress_val = min(1.0, current_page / max(1, total_pages))
         progress_bar.progress(progress_val)
         
@@ -369,39 +408,40 @@ def sync_worldguessr_data(secret_token, filepath, github_repo=None, github_token
     progress_bar.progress(1.0)
     status_box.empty()
     
+    if had_api_error and not new_games:
+        st.error(f"Sync stopped due to WorldGuessr API error: {api_error_detail}. Please verify your API secret token.")
+        return False
+        
     if new_games:
         # Prepend new games to keep newest-first order
         updated_data = new_games + local_data
         
-        # Save to GitHub if repo and token are provided
+        # Save to GitHub if repo and token are configured
         if github_repo and github_token:
-            status_box.text("Uploading updated database to GitHub...")
-            try:
-                success = save_to_github(github_repo, github_token, "worldguessr_full_history.json", updated_data)
-                if success:
-                    st.success("Successfully uploaded synced data to GitHub!")
-                else:
-                    st.error("Failed to upload synced data to GitHub.")
-            except Exception as e:
-                st.error(f"Failed to upload to GitHub: {e}")
+            status_box.text("Uploading updated database to GitHub repository...")
+            success, msg = save_to_github(github_repo, github_token, "worldguessr_full_history.json", updated_data)
+            if success:
+                st.success(f"✅ Synced to GitHub! {msg}")
+            else:
+                st.error(f"❌ GitHub upload failed: {msg}")
                 
-        # Save to file atomically to prevent file watcher race condition crashes
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        try:
-            temp_filepath = filepath + ".tmp"
-            with open(temp_filepath, 'w', encoding='utf-8') as f:
-                json.dump(updated_data, f, indent=4, ensure_ascii=False)
-            os.replace(temp_filepath, filepath)
-            st.success(f"Successfully added {len(new_games)} new matches! Total matches now: {len(updated_data)}")
-            # Clear caches to force reload
-            st.cache_data.clear()
-            return True
-        except Exception as e:
-            st.error(f"Failed to write updated data to file: {e}")
+        # Save to local file atomically if filepath exists
+        if filepath:
+            try:
+                os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                temp_filepath = filepath + ".tmp"
+                with open(temp_filepath, 'w', encoding='utf-8') as f:
+                    json.dump(updated_data, f, indent=4, ensure_ascii=False)
+                os.replace(temp_filepath, filepath)
+            except Exception as e:
+                st.warning(f"Local file write warning: {e}")
+                
+        st.success(f"🎉 Successfully imported {len(new_games)} new matches! Total database: {len(updated_data)} matches.")
+        st.cache_data.clear()
+        return True
     else:
-        st.success("No new matches found. Dashboard is up to date!")
-        
-    return False
+        st.info("✅ Database is up to date. No new matches found on WorldGuessr.")
+        return False
 
 # --- 3. Data Loading & Preprocessing ---
 @st.cache_data(hash_funcs={float: lambda x: x})
@@ -432,11 +472,14 @@ def load_and_process_data(filepath, mtime, github_repo=None, github_token=None):
         game = item.get('game', {})
         players = game.get('players', [])
         
-        # Keep only games where both markiianivan and troutfly participated
-        player_names = {p.get('username') for p in players if p.get('username')}
-        if not ('markiianivan' in player_names and 'troutfly' in player_names):
+        # Keep any match where both markiianivan and troutfly participated (even if 3+ players in lobby)
+        player_map = {(p.get('username') or '').lower(): p for p in players if p.get('username')}
+        if not ('markiianivan' in player_map and 'troutfly' in player_map):
             continue
             
+        markiian_player = player_map['markiianivan']
+        troutfly_player = player_map['troutfly']
+        
         game_id = game.get('gameId')
         started_at_str = game.get('startedAt')
         if not started_at_str:
@@ -460,32 +503,16 @@ def load_and_process_data(filepath, mtime, github_repo=None, github_token=None):
         else:
             map_type = 'Other'
             
-        markiian_player = next((p for p in players if p.get('username') == 'markiianivan'), None)
-        troutfly_player = next((p for p in players if p.get('username') == 'troutfly'), None)
-        
-        if not markiian_player or not troutfly_player:
-            continue
-            
         m_pts = markiian_player.get('totalPoints', 0)
         t_pts = troutfly_player.get('totalPoints', 0)
         
-        # Winner resolution
-        winner = None
-        result = game.get('result', {})
-        winner_id = result.get('winner')
-        
-        if winner_id == markiian_player.get('playerId'):
+        # H2H Winner resolution (strictly between markiianivan and troutfly)
+        if m_pts > t_pts:
             winner = 'markiianivan'
-        elif winner_id == troutfly_player.get('playerId'):
+        elif t_pts > m_pts:
             winner = 'troutfly'
         else:
-            # Fallback to total points comparison
-            if m_pts > t_pts:
-                winner = 'markiianivan'
-            elif t_pts > m_pts:
-                winner = 'troutfly'
-            else:
-                winner = 'draw'
+            winner = 'draw'
                 
         games_list.append({
             'game_id': game_id,
@@ -507,8 +534,8 @@ def load_and_process_data(filepath, mtime, github_repo=None, github_token=None):
                 
             lat, lon = r_loc['lat'], r_loc['long']
             all_guesses = r.get('allGuesses', [])
-            m_guess = next((g for g in all_guesses if g.get('username') == 'markiianivan'), None)
-            t_guess = next((g for g in all_guesses if g.get('username') == 'troutfly'), None)
+            m_guess = next((g for g in all_guesses if (g.get('username') or '').lower() == 'markiianivan'), None)
+            t_guess = next((g for g in all_guesses if (g.get('username') or '').lower() == 'troutfly'), None)
             
             rounds_list.append({
                 'game_id': game_id,
@@ -587,25 +614,94 @@ def file_watcher_fragment(filepath, current_mtime):
 if json_path:
     file_watcher_fragment(json_path, mtime)
 
-# Sync parameters
+# Sync parameters & Controls
 st.sidebar.divider()
 st.sidebar.subheader("🔄 Database Syncing")
+
+with st.sidebar.expander("⚙️ Token & Sync Diagnostics", expanded=False):
+    st.caption("Inspect secret status or enter a temporary override:")
+    wg_override = st.text_input(
+        "WorldGuessr API Token Override:",
+        value="",
+        type="password",
+        placeholder="•••••••• (Using Configured Secret)" if resolved_worldguessr_token else "Enter WorldGuessr Token",
+        help="Leave empty to use the token in Secrets/Local file, or enter a new token to test/sync."
+    )
+    gh_override = st.text_input(
+        "GitHub Access Token Override:",
+        value="",
+        type="password",
+        placeholder="•••••••• (Using Configured Secret)" if resolved_github_token else "Enter GitHub Token",
+        help="Leave empty to use the token in Secrets/Local file, or enter a new token."
+    )
+    
+    active_wg_token = wg_override.strip() if wg_override.strip() else resolved_worldguessr_token
+    active_gh_token = gh_override.strip() if gh_override.strip() else resolved_github_token
+    
+    if st.button("🧪 Test API Connections", use_container_width=True):
+        with st.spinner("Testing API connections..."):
+            # 1. Test WorldGuessr
+            if active_wg_token:
+                try:
+                    test_res = requests.post(
+                        "https://api.worldguessr.com/api/gameHistory",
+                        headers={
+                            "Accept": "*/*",
+                            "Content-Type": "application/json",
+                            "Origin": "https://www.worldguessr.com",
+                            "Referer": "https://www.worldguessr.com/",
+                            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+                        },
+                        json={"secret": active_wg_token, "page": 1, "limit": 1},
+                        timeout=10
+                    )
+                    if test_res.status_code == 200:
+                        test_data = test_res.json()
+                        tot_pages = test_data.get("pagination", {}).get("totalPages", 1)
+                        st.success(f"✅ WorldGuessr API: Connected ({tot_pages} history pages found)")
+                    else:
+                        st.error(f"❌ WorldGuessr API: HTTP {test_res.status_code} - {test_res.text[:120]}")
+                except Exception as e:
+                    st.error(f"❌ WorldGuessr API Error: {e}")
+            else:
+                st.warning("⚠️ WorldGuessr Token not configured!")
+                
+            # 2. Test GitHub
+            if active_gh_token and resolved_github_repo:
+                try:
+                    test_gh = requests.get(
+                        f"https://api.github.com/repos/{resolved_github_repo}",
+                        headers={"Authorization": f"Bearer {active_gh_token}", "Accept": "application/vnd.github.v3+json"},
+                        timeout=10
+                    )
+                    if test_gh.status_code == 200:
+                        gh_json = test_gh.json()
+                        st.success(f"✅ GitHub Repo: Connected ({gh_json.get('full_name')})")
+                    else:
+                        st.error(f"❌ GitHub API: HTTP {test_gh.status_code} - {test_gh.text[:120]}")
+                except Exception as e:
+                    st.error(f"❌ GitHub API Error: {e}")
+            else:
+                st.warning("⚠️ GitHub Token/Repo not configured!")
 
 col_sync1, col_sync2 = st.sidebar.columns(2)
 with col_sync1:
     if st.button("Sync History", use_container_width=True):
-        if resolved_worldguessr_token:
+        wg_token_to_use = wg_override.strip() if wg_override.strip() else resolved_worldguessr_token
+        gh_token_to_use = gh_override.strip() if gh_override.strip() else resolved_github_token
+        
+        if wg_token_to_use:
             with st.spinner("Syncing latest games..."):
                 did_update = sync_worldguessr_data(
-                    resolved_worldguessr_token, 
+                    wg_token_to_use, 
                     json_path, 
                     resolved_github_repo, 
-                    resolved_github_token
+                    gh_token_to_use
                 )
                 if did_update:
                     st.rerun()
         else:
-            st.error("WorldGuessr token not configured! Set WORLDGUESSR_TOKEN in your Secrets/Local config.")
+            st.error("WorldGuessr token not configured! Set WORLDGUESSR_TOKEN in your Secrets or enter it in Diagnostics.")
 with col_sync2:
     if st.button("Refresh", use_container_width=True):
         st.cache_data.clear()
